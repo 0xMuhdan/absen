@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Absensi Sync-QR</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    
+    <!-- Firebase (Compat Version for ease of use) -->
+    <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.9.0/firebase-database-compat.js"></script>
+    
+    <!-- QR Code Generator -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    
+    <!-- QR Code Scanner -->
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- ROLE SELECTION VIEW -->
+        <div id="roleSelection" class="view active">
+            <h1>Sistem Absensi <span class="highlight">Sync-QR</span></h1>
+            <p>Pilih peran Anda untuk melanjutkan</p>
+            <div class="role-buttons">
+                <button onclick="selectRole('operator')" class="btn primary">💻 Operator (Laptop)</button>
+                <button onclick="selectRole('student')" class="btn secondary">📱 Mahasiswa (HP)</button>
+            </div>
+        </div>
+
+        <!-- OPERATOR VIEW -->
+        <div id="operatorView" class="view">
+            <button onclick="goBack()" class="btn-back">⬅ Kembali</button>
+            <h2>Mode <span class="highlight">Operator</span></h2>
+            
+            <div id="operatorForm" class="card">
+                <div class="form-group">
+                    <label for="nama">Nama Lengkap</label>
+                    <input type="text" id="nama" placeholder="Masukkan Nama">
+                </div>
+                <div class="form-group">
+                    <label for="nim">NIM</label>
+                    <input type="text" id="nim" placeholder="Masukkan NIM">
+                </div>
+                <div class="form-group">
+                    <label for="prodi">Program Studi</label>
+                    <input type="text" id="prodi" placeholder="Masukkan Prodi">
+                </div>
+                <button id="generateBtn" onclick="generateQR()" class="btn primary full-width">Generate QR Code</button>
+            </div>
+
+            <div id="operatorQR" class="card hidden">
+                <h3>Scan untuk Absen</h3>
+                <p>Silakan scan QR di bawah ini menggunakan HP Anda</p>
+                <div id="qrcodeBox"></div>
+                <div class="loading-state">Mendengarkan status...</div>
+            </div>
+
+            <div id="operatorSuccess" class="card success-card hidden">
+                <div class="success-icon">✅</div>
+                <h2 id="successMessageName">NAMA BERHASIL ABSEN!</h2>
+                <button onclick="resetOperator()" class="btn secondary full-width mt-4">Absen Berikutnya</button>
+            </div>
+        </div>
+
+        <!-- STUDENT VIEW -->
+        <div id="studentView" class="view">
+            <button onclick="goBack()" class="btn-back">⬅ Kembali</button>
+            <h2>Mode <span class="highlight">Mahasiswa</span></h2>
+            
+            <div id="studentScanner" class="card">
+                <p>Arahkan kamera ke QR Code di layar Laptop</p>
+                <div id="reader" width="600px"></div>
+            </div>
+
+            <div id="studentSuccess" class="card success-card hidden">
+                <div class="success-icon">✅</div>
+                <h2>Absensi Berhasil!</h2>
+                <p>Terima kasih, data Anda telah tersimpan.</p>
+                <button onclick="resetStudent()" class="btn secondary full-width mt-4">Scan Lagi</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN APP SCRIPT -->
+    <script src="app.js"></script>
+</body>
+</html>
