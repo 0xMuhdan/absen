@@ -1,7 +1,8 @@
 // Global Variables
+let peer = null;
+let operatorPeerId = null;
 let currentSessionId = null;
 let html5QrcodeScanner = null;
-let pollingInterval = null;
 
 // ==========================================
 // 2. VIEW ROUTING LOGIC
@@ -11,6 +12,7 @@ function selectRole(role) {
     
     if (role === 'operator') {
         document.getElementById('operatorView').classList.add('active');
+        initOperatorPeer();
         resetOperator();
     } else if (role === 'student') {
         document.getElementById('studentView').classList.add('active');
@@ -26,7 +28,6 @@ function goBack() {
     if (html5QrcodeScanner) {
         html5QrcodeScanner.clear().catch(error => console.error(error));
     }
-    if (pollingInterval) clearInterval(pollingInterval);
 }
 
 function generateUUID() {
@@ -36,10 +37,45 @@ function generateUUID() {
     });
 }
 
+function initOperatorPeer() {
+    if (!peer) {
+        const genBtn = document.getElementById('generateBtn');
+        genBtn.disabled = true;
+        genBtn.innerText = "Menghubungkan ke Jaringan...";
+        
+        // PeerJS: Menggunakan server publik gratis, tidak perlu API key!
+        peer = new Peer(); 
+        
+        peer.on('open', (id) => {
+            operatorPeerId = id;
+            genBtn.disabled = false;
+            genBtn.innerText = "Generate QR Code";
+        });
+        
+        peer.on('connection', (conn) => {
+            conn.on('data', (data) => {
+                // Saat mahasiswa scan dan kirim data success
+                if (data.action === 'scan_success' && data.sessionId === currentSessionId) {
+                    const nama = document.getElementById('nama').value.trim();
+                    document.getElementById('operatorQR').classList.add('hidden');
+                    const successView = document.getElementById('operatorSuccess');
+                    successView.classList.remove('hidden');
+                    document.getElementById('successMessageName').innerText = `${nama.toUpperCase()} BERHASIL ABSEN!`;
+                }
+            });
+        });
+
+        peer.on('error', (err) => {
+             console.error(err);
+             alert("Koneksi jaringan putus. Silakan muat ulang halaman.");
+        });
+    }
+}
+
 // ==========================================
 // 3. OPERATOR LOGIC (LAPTOP)
 // ==========================================
-async function generateQR() {
+function generateQR() {
     const nama = document.getElementById('nama').value.trim();
     const nim = document.getElementById('nim').value.trim();
     const prodi = document.getElementById('prodi').value.trim();
@@ -49,67 +85,31 @@ async function generateQR() {
         return;
     }
 
+    if (!operatorPeerId) {
+        alert("Sabar, masih menghubungi jaringan P2P...");
+        return;
+    }
+
     currentSessionId = generateUUID();
 
-    const sessionData = {
-        id: currentSessionId,
-        nama: nama,
-        nim: nim,
-        prodi: prodi
-    };
+    // Data yang dimasukkan ke QR adalah ID Jaringan Operator dan ID Sesi
+    const qrData = JSON.stringify({
+        peerId: operatorPeerId,
+        sessionId: currentSessionId
+    });
 
-    try {
-        const response = await fetch('/api/post-qr', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(sessionData)
-        });
+    document.getElementById('operatorForm').classList.add('hidden');
+    document.getElementById('operatorQR').classList.remove('hidden');
 
-        if (response.ok) {
-            document.getElementById('operatorForm').classList.add('hidden');
-            document.getElementById('operatorQR').classList.remove('hidden');
-
-            document.getElementById("qrcodeBox").innerHTML = "";
-            new QRCode(document.getElementById("qrcodeBox"), {
-                text: currentSessionId,
-                width: 250,
-                height: 250,
-                colorDark : "#000000",
-                colorLight : "#ffffff",
-                correctLevel : QRCode.CorrectLevel.H
-            });
-
-            // Mulai Polling
-            listenToStatus(currentSessionId, nama);
-        } else {
-            alert("Gagal koneksi ke server lokal.");
-        }
-    } catch (e) {
-        console.error(e);
-        alert("Terjadi kesalahan jaringan.");
-    }
-}
-
-function listenToStatus(sessionId, nama) {
-    if (pollingInterval) clearInterval(pollingInterval);
-    
-    pollingInterval = setInterval(async () => {
-        try {
-            const response = await fetch('/api/status?id=' + sessionId);
-            if (response.ok) {
-                const data = await response.json();
-                if (data.status === 'success') {
-                    clearInterval(pollingInterval);
-                    document.getElementById('operatorQR').classList.add('hidden');
-                    const successView = document.getElementById('operatorSuccess');
-                    successView.classList.remove('hidden');
-                    document.getElementById('successMessageName').innerText = `${nama.toUpperCase()} BERHASIL ABSEN!`;
-                }
-            }
-        } catch (e) {
-            console.error(e);
-        }
-    }, 1500); // Cek tiap 1.5 detik
+    document.getElementById("qrcodeBox").innerHTML = "";
+    new QRCode(document.getElementById("qrcodeBox"), {
+        text: qrData,
+        width: 250,
+        height: 250,
+        colorDark : "#000000",
+        colorLight : "#ffffff",
+        correctLevel : QRCode.CorrectLevel.H
+    });
 }
 
 function resetOperator() {
@@ -120,8 +120,7 @@ function resetOperator() {
     document.getElementById('nama').value = '';
     document.getElementById('nim').value = '';
     document.getElementById('prodi').value = '';
-    
-    if (pollingInterval) clearInterval(pollingInterval);
+    currentSessionId = null;
 }
 
 // ==========================================
@@ -140,28 +139,56 @@ function startScanner() {
     html5QrcodeScanner.render(onScanSuccess, onScanFailure);
 }
 
-async function onScanSuccess(decodedText, decodedResult) {
-    const scannedSessionId = decodedText;
-    html5QrcodeScanner.clear();
-
+function onScanSuccess(decodedText, decodedResult) {
+    html5QrcodeScanner.clear(); // Hentikan kamera
+    
     try {
-        const response = await fetch(`/api/scan?id=${scannedSessionId}`);
-        if (response.ok) {
-            document.getElementById('studentScanner').classList.add('hidden');
-            document.getElementById('studentSuccess').classList.remove('hidden');
-        } else {
-            alert("Sesi QR tidak valid atau kadaluarsa.");
+        const qrData = JSON.parse(decodedText);
+        
+        if (!qrData.peerId || !qrData.sessionId) throw new Error("Format QR Tidak Valid");
+
+        // Mahasiswa masuk ke P2P network hanya untuk mengirim pesan kesuksesan
+        const studentPeer = new Peer();
+        
+        studentPeer.on('open', () => {
+            const conn = studentPeer.connect(qrData.peerId);
+            
+            conn.on('open', () => {
+                // Kirim sinyal sukses dengerin ke laptop operator
+                conn.send({
+                    action: 'scan_success',
+                    sessionId: qrData.sessionId
+                });
+                
+                // Tampilkan pesan sukses di HP
+                document.getElementById('studentScanner').classList.add('hidden');
+                document.getElementById('studentSuccess').classList.remove('hidden');
+                
+                // Tutup koneksi agar tidak memberatkan device hp
+                setTimeout(() => studentPeer.destroy(), 2000);
+            });
+            
+            conn.on('error', () => {
+                alert("Gagal terhubung ke Laptop Operator. Coba scan lagi.");
+                resetStudent();
+            });
+        });
+
+        studentPeer.on('error', (err) => {
+            console.error(err);
+            alert("Sinyal internet terlalu lemah untuk terhubung. Coba lagi.");
             resetStudent();
-        }
+        });
+
     } catch (error) {
-        console.error("Error updating status: ", error);
-        alert("Gagal update status.");
+        console.error(error);
+        alert("Gagal membaca kode QR ini. Pastikan dari aplikasi yang benar.");
         resetStudent();
     }
 }
 
 function onScanFailure(error) {
-    // Ignore scan failures
+    // Abaikan jika tidak ada QR yang terdeteksi diframe
 }
 
 function resetStudent() {
