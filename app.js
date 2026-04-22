@@ -3,6 +3,8 @@ let peer = null;
 let operatorPeerId = null;
 let currentSessionId = null;
 let html5QrcodeScanner = null;
+let qrTimeout = null;
+let qrInterval = null;
 
 // ==========================================
 // 2. VIEW ROUTING LOGIC
@@ -28,6 +30,7 @@ function goBack() {
     if (html5QrcodeScanner) {
         html5QrcodeScanner.clear().catch(error => console.error(error));
     }
+    clearQRTimer();
 }
 
 function generateUUID() {
@@ -43,7 +46,7 @@ function initOperatorPeer() {
         genBtn.disabled = true;
         genBtn.innerText = "Menghubungkan ke Jaringan...";
         
-        // PeerJS: Menggunakan server publik gratis, tidak perlu API key!
+        // PeerJS: Menggunakan server publik gratis
         peer = new Peer(); 
         
         peer.on('open', (id) => {
@@ -56,6 +59,8 @@ function initOperatorPeer() {
             conn.on('data', (data) => {
                 // Saat mahasiswa scan dan kirim data success
                 if (data.action === 'scan_success' && data.sessionId === currentSessionId) {
+                    clearQRTimer(); // Hentikan timer kalau berhasil
+
                     const nama = document.getElementById('nama').value.trim();
                     document.getElementById('operatorQR').classList.add('hidden');
                     const successView = document.getElementById('operatorSuccess');
@@ -92,11 +97,9 @@ function generateQR() {
 
     currentSessionId = generateUUID();
 
-    // Data yang dimasukkan ke QR adalah ID Jaringan Operator dan ID Sesi
-    const qrData = JSON.stringify({
-        peerId: operatorPeerId,
-        sessionId: currentSessionId
-    });
+    // Data dibikin sangat simpel: peerId|sessionId
+    // Tujuannya agar QR code jauh lebih mudah discan HP (tidak ribet/kecil)
+    const qrData = `${operatorPeerId}|${currentSessionId}`;
 
     document.getElementById('operatorForm').classList.add('hidden');
     document.getElementById('operatorQR').classList.remove('hidden');
@@ -108,11 +111,42 @@ function generateQR() {
         height: 250,
         colorDark : "#000000",
         colorLight : "#ffffff",
-        correctLevel : QRCode.CorrectLevel.H
+        correctLevel : QRCode.CorrectLevel.L // Diubah dari H ke L agar garis QR besar & gampang discan
     });
+
+    // Mulai hitung mundur 5 menit
+    startQRTimer(5 * 60);
+}
+
+function startQRTimer(seconds) {
+    clearQRTimer();
+    
+    let timeRemaining = seconds;
+    const timerDisplay = document.getElementById('qrTimer');
+    
+    qrInterval = setInterval(() => {
+        timeRemaining--;
+        
+        const m = Math.floor(timeRemaining / 60).toString().padStart(2, '0');
+        const s = (timeRemaining % 60).toString().padStart(2, '0');
+        timerDisplay.innerText = `Waktu tersisa: ${m}:${s}`;
+        
+        if (timeRemaining <= 0) {
+            clearQRTimer();
+            alert("Waktu scan QR sudah habis (5 Menit). Silakan Generate ulang.");
+            resetOperator();
+        }
+    }, 1000);
+}
+
+function clearQRTimer() {
+    if (qrInterval) clearInterval(qrInterval);
+    if (qrTimeout) clearTimeout(qrTimeout);
+    document.getElementById('qrTimer').innerText = "Waktu tersisa: 05:00";
 }
 
 function resetOperator() {
+    clearQRTimer();
     document.getElementById('operatorForm').classList.remove('hidden');
     document.getElementById('operatorQR').classList.add('hidden');
     document.getElementById('operatorSuccess').classList.add('hidden');
@@ -143,28 +177,32 @@ function onScanSuccess(decodedText, decodedResult) {
     html5QrcodeScanner.clear(); // Hentikan kamera
     
     try {
-        const qrData = JSON.parse(decodedText);
-        
-        if (!qrData.peerId || !qrData.sessionId) throw new Error("Format QR Tidak Valid");
+        // Tadi pake JSON.parse menyebabkan QR ruwet. 
+        // Sekarang pakai split '|' biasa yang simpel
+        const parts = decodedText.split('|');
+        if (parts.length !== 2) throw new Error("Format QR Tidak Valid");
 
-        // Mahasiswa masuk ke P2P network hanya untuk mengirim pesan kesuksesan
+        const scannedPeerId = parts[0];
+        const scannedSessionId = parts[1];
+
+        // Mahasiswa masuk ke P2P network untuk konfirmasi
         const studentPeer = new Peer();
         
         studentPeer.on('open', () => {
-            const conn = studentPeer.connect(qrData.peerId);
+            const conn = studentPeer.connect(scannedPeerId);
             
             conn.on('open', () => {
-                // Kirim sinyal sukses dengerin ke laptop operator
+                // Kirim pesan sukses ke laptop operator
                 conn.send({
                     action: 'scan_success',
-                    sessionId: qrData.sessionId
+                    sessionId: scannedSessionId
                 });
                 
-                // Tampilkan pesan sukses di HP
+                // Tampilkan sukses di layar HP
                 document.getElementById('studentScanner').classList.add('hidden');
                 document.getElementById('studentSuccess').classList.remove('hidden');
                 
-                // Tutup koneksi agar tidak memberatkan device hp
+                // Tutup koneksi agar hemat baterai/internet
                 setTimeout(() => studentPeer.destroy(), 2000);
             });
             
@@ -176,19 +214,19 @@ function onScanSuccess(decodedText, decodedResult) {
 
         studentPeer.on('error', (err) => {
             console.error(err);
-            alert("Sinyal internet terlalu lemah untuk terhubung. Coba lagi.");
+            alert("Sinyal internet HP terlalu lemah. Coba scan sekali lagi.");
             resetStudent();
         });
 
     } catch (error) {
         console.error(error);
-        alert("Gagal membaca kode QR ini. Pastikan dari aplikasi yang benar.");
+        alert("Gagal membaca kode QR ini (Tidak Valid/Expired).");
         resetStudent();
     }
 }
 
 function onScanFailure(error) {
-    // Abaikan jika tidak ada QR yang terdeteksi diframe
+    // Abaikan frame yang blur
 }
 
 function resetStudent() {
