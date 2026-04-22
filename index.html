@@ -7,8 +7,6 @@
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
     
-    <!-- PeerJS for P2P Communication (No API Key needed) -->
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     
     <!-- QR Code Generator -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -72,6 +70,11 @@
             <div id="studentScanner" class="card">
                 <p>Arahkan kamera ke QR Code di layar Laptop</p>
                 <div id="reader" width="600px"></div>
+            </div>
+
+            <div id="studentLoading" class="card hidden">
+                <h3>🔄 Sedang Sinkronisasi...</h3>
+                <p>Menghubungkan ke server dan mencari laptop...</p>
             </div>
 
             <div id="studentSuccess" class="card success-card hidden">

@@ -1,10 +1,10 @@
 // Global Variables
-let peer = null;
-let operatorPeerId = null;
 let currentSessionId = null;
+let ntfyTopic = null;
 let html5QrcodeScanner = null;
 let qrTimeout = null;
 let qrInterval = null;
+let eventSource = null; // Menampung koneksi jembatan (SSE) ke Server
 
 // ==========================================
 // 2. VIEW ROUTING LOGIC
@@ -14,7 +14,6 @@ function selectRole(role) {
     
     if (role === 'operator') {
         document.getElementById('operatorView').classList.add('active');
-        initOperatorPeer();
         resetOperator();
     } else if (role === 'student') {
         document.getElementById('studentView').classList.add('active');
@@ -31,6 +30,9 @@ function goBack() {
         html5QrcodeScanner.clear().catch(error => console.error(error));
     }
     clearQRTimer();
+    if(eventSource) {
+        eventSource.close();
+    }
 }
 
 function generateUUID() {
@@ -38,43 +40,6 @@ function generateUUID() {
         var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
         return v.toString(16);
     });
-}
-
-function initOperatorPeer() {
-    if (!peer) {
-        const genBtn = document.getElementById('generateBtn');
-        genBtn.disabled = true;
-        genBtn.innerText = "Menghubungkan ke Jaringan...";
-        
-        // PeerJS: Menggunakan server publik gratis
-        peer = new Peer(); 
-        
-        peer.on('open', (id) => {
-            operatorPeerId = id;
-            genBtn.disabled = false;
-            genBtn.innerText = "Generate QR Code";
-        });
-        
-        peer.on('connection', (conn) => {
-            conn.on('data', (data) => {
-                // Saat mahasiswa scan dan kirim data success
-                if (data.action === 'scan_success' && data.sessionId === currentSessionId) {
-                    clearQRTimer(); // Hentikan timer kalau berhasil
-
-                    const nama = document.getElementById('nama').value.trim();
-                    document.getElementById('operatorQR').classList.add('hidden');
-                    const successView = document.getElementById('operatorSuccess');
-                    successView.classList.remove('hidden');
-                    document.getElementById('successMessageName').innerText = `${nama.toUpperCase()} BERHASIL ABSEN!`;
-                }
-            });
-        });
-
-        peer.on('error', (err) => {
-             console.error(err);
-             alert("Koneksi jaringan putus. Silakan muat ulang halaman.");
-        });
-    }
 }
 
 // ==========================================
@@ -90,16 +55,12 @@ function generateQR() {
         return;
     }
 
-    if (!operatorPeerId) {
-        alert("Sabar, masih menghubungi jaringan P2P...");
-        return;
-    }
-
+    // Generate kode unik dan Topik Rahasia untuk Ntfy
     currentSessionId = generateUUID();
+    ntfyTopic = "syncqr_" + currentSessionId.replace(/-/g, '');
 
-    // Data dibikin sangat simpel: peerId|sessionId
-    // Tujuannya agar QR code jauh lebih mudah discan HP (tidak ribet/kecil)
-    const qrData = `${operatorPeerId}|${currentSessionId}`;
+    // Data dibikin sangat simpel: topiknya_apa|sessionId_nya_apa
+    const qrData = `${ntfyTopic}|${currentSessionId}`;
 
     document.getElementById('operatorForm').classList.add('hidden');
     document.getElementById('operatorQR').classList.remove('hidden');
@@ -111,11 +72,45 @@ function generateQR() {
         height: 250,
         colorDark : "#000000",
         colorLight : "#ffffff",
-        correctLevel : QRCode.CorrectLevel.L // Diubah dari H ke L agar garis QR besar & gampang discan
+        correctLevel : QRCode.CorrectLevel.L // Low agar lebih gampang discan
     });
 
-    // Mulai hitung mundur 5 menit
+    // Mulai mendengarkan jembatan Ntfy (Server-Sent Events)
+    listenToNetwork(nama);
+
+    // Mulai hitung mundur 5 menit otomatis
     startQRTimer(5 * 60);
+}
+
+function listenToNetwork(nama) {
+    if(eventSource) {
+        eventSource.close();
+    }
+    
+    // Connect ke Ntfy.sh (API Publik Gratis, No API Key, Bebas NAT/Firewall)
+    eventSource = new EventSource(`https://ntfy.sh/${ntfyTopic}/sse`);
+    
+    eventSource.onmessage = (e) => {
+        const data = JSON.parse(e.data); // data dikirim sebagai JSON dari server Ntfy
+        
+        if (data.event === 'message') {
+            const payload = data.message;
+            if (payload === currentSessionId) {
+                // Success! Sinyal dari HP ditebak dengan benar!
+                eventSource.close();
+                clearQRTimer();
+
+                document.getElementById('operatorQR').classList.add('hidden');
+                const successView = document.getElementById('operatorSuccess');
+                successView.classList.remove('hidden');
+                document.getElementById('successMessageName').innerText = `${nama.toUpperCase()} BERHASIL ABSEN!`;
+            }
+        }
+    };
+    
+    eventSource.onerror = (err) => {
+        console.error("Koneksi Ntfy terputus, mencoba lagi otomatis...", err);
+    };
 }
 
 function startQRTimer(seconds) {
@@ -133,6 +128,7 @@ function startQRTimer(seconds) {
         
         if (timeRemaining <= 0) {
             clearQRTimer();
+            if(eventSource) eventSource.close();
             alert("Waktu scan QR sudah habis (5 Menit). Silakan Generate ulang.");
             resetOperator();
         }
@@ -142,11 +138,14 @@ function startQRTimer(seconds) {
 function clearQRTimer() {
     if (qrInterval) clearInterval(qrInterval);
     if (qrTimeout) clearTimeout(qrTimeout);
-    document.getElementById('qrTimer').innerText = "Waktu tersisa: 05:00";
+    const timerDisplay = document.getElementById('qrTimer');
+    if(timerDisplay) timerDisplay.innerText = "Waktu tersisa: 05:00";
 }
 
 function resetOperator() {
     clearQRTimer();
+    if(eventSource) eventSource.close();
+    
     document.getElementById('operatorForm').classList.remove('hidden');
     document.getElementById('operatorQR').classList.add('hidden');
     document.getElementById('operatorSuccess').classList.add('hidden');
@@ -162,6 +161,7 @@ function resetOperator() {
 // ==========================================
 function startScanner() {
     document.getElementById('studentScanner').classList.remove('hidden');
+    document.getElementById('studentLoading').classList.add('hidden');
     document.getElementById('studentSuccess').classList.add('hidden');
 
     html5QrcodeScanner = new Html5QrcodeScanner(
@@ -173,54 +173,40 @@ function startScanner() {
     html5QrcodeScanner.render(onScanSuccess, onScanFailure);
 }
 
-function onScanSuccess(decodedText, decodedResult) {
+async function onScanSuccess(decodedText, decodedResult) {
     html5QrcodeScanner.clear(); // Hentikan kamera
     
+    // Tampilkan Animasi/Status Loading di HP!!
+    document.getElementById('studentScanner').classList.add('hidden');
+    document.getElementById('studentLoading').classList.remove('hidden');
+    
     try {
-        // Tadi pake JSON.parse menyebabkan QR ruwet. 
-        // Sekarang pakai split '|' biasa yang simpel
         const parts = decodedText.split('|');
         if (parts.length !== 2) throw new Error("Format QR Tidak Valid");
 
-        const scannedPeerId = parts[0];
+        const scannedTopic = parts[0];
         const scannedSessionId = parts[1];
 
-        // Mahasiswa masuk ke P2P network untuk konfirmasi
-        const studentPeer = new Peer();
+        // Tembak Server Publik Ntfy POST (Jauh lebih ampuh daripada PeerJS P2P)
+        const response = await fetch(`https://ntfy.sh/${scannedTopic}`, {
+            method: 'POST',
+            body: scannedSessionId
+        });
+
+        if (response.ok) {
+            // Berhasil diklik & sampai ke Laptop!
+            document.getElementById('studentLoading').classList.add('hidden');
+            document.getElementById('studentSuccess').classList.remove('hidden');
+        } else {
+            throw new Error("Gagal hit API publik");
+        }
         
-        studentPeer.on('open', () => {
-            const conn = studentPeer.connect(scannedPeerId);
-            
-            conn.on('open', () => {
-                // Kirim pesan sukses ke laptop operator
-                conn.send({
-                    action: 'scan_success',
-                    sessionId: scannedSessionId
-                });
-                
-                // Tampilkan sukses di layar HP
-                document.getElementById('studentScanner').classList.add('hidden');
-                document.getElementById('studentSuccess').classList.remove('hidden');
-                
-                // Tutup koneksi agar hemat baterai/internet
-                setTimeout(() => studentPeer.destroy(), 2000);
-            });
-            
-            conn.on('error', () => {
-                alert("Gagal terhubung ke Laptop Operator. Coba scan lagi.");
-                resetStudent();
-            });
-        });
-
-        studentPeer.on('error', (err) => {
-            console.error(err);
-            alert("Sinyal internet HP terlalu lemah. Coba scan sekali lagi.");
-            resetStudent();
-        });
-
     } catch (error) {
         console.error(error);
-        alert("Gagal membaca kode QR ini (Tidak Valid/Expired).");
+        alert("Gagal koneksi! Pastikan jaringan internet stabil lalu coba lagi.");
+        
+        // Kembalikan ke scanner jika gagal
+        document.getElementById('studentLoading').classList.add('hidden');
         resetStudent();
     }
 }
